@@ -90,6 +90,88 @@ class MyLLM(HelloAgentsLLM):
 - 显式参数 → IDE 代码提示友好
 - **kwargs → 灵活透传，父类改参数子类不用改
 
+### 2.3 怎么知道 **kwargs 里面有什么？
+
+**问题**：使用 **kwargs 时，怎么知道传了哪些参数？
+
+**方法1：调试时直接打印**
+
+```python
+def my_func(**kwargs):
+    print(f'kwargs 类型: {type(kwargs)}')  # <class 'dict'>
+    print(f'kwargs 内容: {kwargs}')        # {'name': '张三', 'age': 25}
+    print(f'所有键: {kwargs.keys()}')      # dict_keys(['name', 'age'])
+```
+
+**方法2：看源码追踪**
+
+```python
+# hello-agents 项目中的追踪链
+SimpleAgent.stream_run(**kwargs)
+    ↓
+HelloAgentsLLM.stream_invoke(messages, **kwargs)
+    ↓
+OpenAI client.chat.completions.create(
+    temperature=kwargs.get('temperature'),  # 从 kwargs 取值
+    max_tokens=kwargs.get('max_tokens'),
+    **kwargs  # 其他参数透传
+)
+```
+
+**方法3：用 .get() 取已知参数**
+
+```python
+def invoke(self, messages, **kwargs):
+    # 从 kwargs 中取已知参数，没有就用默认值
+    temperature = kwargs.get('temperature', 0.7)
+    max_tokens = kwargs.get('max_tokens', 4096)
+
+    # 其他参数透传
+    other_params = {k: v for k, v in kwargs.items()
+                    if k not in ['temperature', 'max_tokens']}
+```
+
+**方法4：文档注释说明**
+
+```python
+def stream_run(self, input_text: str, **kwargs):
+    '''
+    流式运行 Agent
+
+    Args:
+        input_text: 用户输入
+        **kwargs: 透传给 LLM 的参数
+            - temperature: 温度参数 (0-2)
+            - max_tokens: 最大输出 token 数
+            - top_p: 核采样参数
+    '''
+    pass
+```
+
+### 2.4 kwargs 的三种处理方式
+
+| 方式 | 代码 | 说明 |
+|------|------|------|
+| 取值 | `kwargs.get('key', default)` | 安全取值，可设默认值 |
+| 解包 | `func(**kwargs)` | 整体传给另一个函数 |
+| 过滤 | `{k:v for k,v in kwargs.items() if ...}` | 筛选后使用 |
+
+**最佳实践**：常用参数显式定义 + kwargs 透传其他
+
+```python
+def invoke(
+    self,
+    messages: list,
+    temperature: float = 0.7,      # 显式定义，IDE 有提示
+    max_tokens: int = 4096,
+    **kwargs                        # 其他参数透传
+):
+    # 已知参数直接用
+    print(f'temperature: {temperature}')
+    # 其他参数透传
+    other = kwargs  # {'top_p': 0.9, ...}
+```
+
 ---
 
 ## 三、数据结构
@@ -337,6 +419,169 @@ BadAgent()  # ❌ TypeError: 必须实现 run()
 用 ABC：创建实例时就报错
 ```
 
+### 8.4 抽象方法 vs 普通方法
+
+```python
+from abc import ABC, abstractmethod
+
+class Agent(ABC):
+    @abstractmethod
+    def run(self, input_text: str) -> str:
+        '''抽象方法：子类必须实现'''
+        pass
+
+    @abstractmethod
+    def validate(self, input_text: str) -> bool:
+        '''抽象方法：子类必须实现'''
+        pass
+
+    # 普通方法：子类可以直接用，也可以覆盖
+    def add_message(self, message):
+        '''普通方法：提供默认实现'''
+        print(f'添加消息: {message}')
+
+    # 钩子方法：子类可以覆盖，也可以不覆盖
+    def before_run(self):
+        '''钩子方法：可选实现'''
+        pass
+
+# 子类只需实现抽象方法
+class SimpleAgent(Agent):
+    def run(self, input_text: str) -> str:
+        self.before_run()  # 可选调用钩子
+        return f'回答: {input_text}'
+
+    def validate(self, input_text: str) -> bool:
+        return len(input_text) > 0
+```
+
+### 8.5 实战场景
+
+**场景1：插件系统**
+
+```python
+from abc import ABC, abstractmethod
+
+class Plugin(ABC):
+    name: str
+
+    @abstractmethod
+    def execute(self, data: dict) -> dict:
+        '''执行插件'''
+        pass
+
+    @abstractmethod
+    def validate(self, data: dict) -> bool:
+        '''验证输入'''
+        pass
+
+    def log(self, msg: str):
+        '''公共方法'''
+        print(f'[{self.name}] {msg}')
+
+class DataCleaner(Plugin):
+    name = 'DataCleaner'
+
+    def validate(self, data: dict) -> bool:
+        return 'text' in data
+
+    def execute(self, data: dict) -> dict:
+        self.log('清理数据')
+        return {'text': data['text'].strip()}
+
+# 使用
+plugins = [DataCleaner()]
+for p in plugins:
+    if p.validate(data):
+        data = p.execute(data)
+```
+
+**场景2：工具基类（hello_agents tools）**
+
+```python
+class Tool(ABC):
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        '''工具名称'''
+        pass
+
+    @property
+    @abstractmethod
+    def description(self) -> str:
+        '''工具描述'''
+        pass
+
+    @abstractmethod
+    def run(self, *args, **kwargs) -> str:
+        '''执行工具'''
+        pass
+
+    def to_openai_schema(self) -> dict:
+        '''公共方法：生成 OpenAI 工具定义'''
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+            }
+        }
+
+class Calculator(Tool):
+    @property
+    def name(self) -> str:
+        return "calculator"
+
+    @property
+    def description(self) -> str:
+        return "执行数学计算"
+
+    def run(self, expression: str) -> str:
+        return str(eval(expression))
+```
+
+### 8.6 什么时候用 ABC？
+
+| 场景 | 用 ABC | 不用 ABC |
+|------|--------|---------|
+| 框架基类 | ✅ 强制子类实现关键方法 | - |
+| 插件系统 | ✅ 定义插件接口 | - |
+| 简单继承 | - | ✅ 只是共享代码 |
+| Mixin 类 | - | ✅ 只添加功能 |
+
+### 8.7 ABC 速查表
+
+```python
+from abc import ABC, abstractmethod
+
+# 1. 继承 ABC
+class MyAbstractClass(ABC):
+
+    # 2. 用 @abstractmethod 标记必须实现的方法
+    @abstractmethod
+    def must_implement(self):
+        pass
+
+    # 3. 普通方法子类可以直接用
+    def common_method(self):
+        print('公共实现')
+
+    # 4. @property + @abstractmethod = 抽象属性
+    @property
+    @abstractmethod
+    def name(self) -> str:
+        pass
+
+# 5. 子类必须实现所有抽象方法才能实例化
+class Concrete(MyAbstractClass):
+    @property
+    def name(self) -> str:
+        return "concrete"
+
+    def must_implement(self):
+        return "实现"
+```
+
 ---
 
 ## 九、项目模块划分设计
@@ -458,6 +703,9 @@ project/
 | `TypedDict` | `struct` | - |
 | `ABC` + `@abstractmethod` | 纯虚函数 `= 0` | `QAbstractXxx` |
 | `async/await` | `QFuture` | `QEventLoop` |
+| `yield` | 协程/迭代器 | - |
+| `@classmethod` | 静态方法 | - |
+| `@staticmethod` | 静态方法 | - |
 
 ---
 
@@ -471,3 +719,221 @@ project/
 | 命令面板 | `Ctrl + Shift + P` | 执行各种命令 |
 | 打开文件夹 | `Ctrl + K, Ctrl + O` | 打开新目录 |
 | 切换侧边栏 | `Ctrl + B` | 显示/隐藏资源管理器 |
+
+---
+
+## 十二、yield 生成器
+
+### 12.1 yield vs return
+
+| | return | yield |
+|--|--------|-------|
+| 执行 | 函数结束 | 函数暂停 |
+| 返回 | 一次性返回所有 | 逐个返回 |
+| 内存 | 占用大 | 省内存 |
+
+```python
+# return：一次返回
+def get_list():
+    return [1, 2, 3]
+
+# yield：逐个返回
+def get_generator():
+    yield 1
+    yield 2
+    yield 3
+
+# 使用
+for num in get_generator():
+    print(num)
+```
+
+### 12.2 yield from 透传
+
+```python
+def outer():
+    yield 'start'
+    yield from inner()  # 透传 inner 的所有 yield
+    yield 'end'
+
+def inner():
+    yield 'a'
+    yield 'b'
+
+list(outer())  # ['start', 'a', 'b', 'end']
+```
+
+### 12.3 LLM 流式输出应用
+
+```python
+def stream_invoke(self, messages, **kwargs):
+    '''流式调用 LLM'''
+    for chunk in self.llm.stream(messages):
+        yield chunk  # 逐块返回
+
+# 使用
+for chunk in agent.stream_run("你好"):
+    print(chunk, end='')  # 实时显示
+```
+
+**好处**：
+- 用户实时看到内容
+- 省内存
+- 可随时中断
+
+---
+
+## 十三、invoke 和 stream_invoke 设计
+
+### 13.1 对比
+
+| 方法 | 返回 | 适用场景 |
+|------|------|---------|
+| `invoke` | 完整响应 | 后台任务、API 服务 |
+| `stream_invoke` | 逐块响应 | 用户对话、实时体验 |
+
+### 13.2 代码解析
+
+```python
+# invoke：非流式，一次返回
+def invoke(self, messages, **kwargs):
+    response = self._client.chat.completions.create(
+        model=self.model,
+        messages=messages,
+        temperature=kwargs.get('temperature', self.temperature),
+        max_tokens=kwargs.get('max_tokens', self.max_tokens),
+        **{k: v for k, v in kwargs.items()
+           if k not in ['temperature', 'max_tokens']}
+    )
+    return response.choices[0].message.content
+
+# stream_invoke：流式，逐块返回
+def stream_invoke(self, messages, **kwargs):
+    temperature = kwargs.get('temperature')
+    yield from self.think(messages, temperature)
+```
+
+### 13.3 kwargs 处理模式
+
+```python
+# 优先级：用户传入 > 实例默认值
+temperature=kwargs.get('temperature', self.temperature)
+
+# 过滤已处理参数，透传其他
+**{k: v for k, v in kwargs.items()
+   if k not in ['temperature', 'max_tokens']}
+```
+
+---
+
+## 十四、方法重写添加参数
+
+### 14.1 参数提升模式
+
+```python
+# 基类：**kwargs 兜底
+class Agent(ABC):
+    @abstractmethod
+    def run(self, input_text: str, **kwargs) -> str:
+        pass
+
+# 子类：提升参数为显式定义
+class MyAgent(Agent):
+    def run(self, input_text: str, max_iterations: int = 3, **kwargs):
+        # 可以直接用 max_iterations
+        pass
+```
+
+### 14.2 为什么可以这样？
+
+基类 `**kwargs` 接收任意参数，子类可以把常用参数"提升"为显式参数。
+
+**调用方式都兼容**：
+
+```python
+agent.run("hello")                      # 用默认值
+agent.run("hello", max_iterations=5)    # 显式传值
+agent.run("hello", temperature=0.7)     # 透传其他参数
+```
+
+### 14.3 设计意义
+
+不同子类需要不同参数，基类不需要预知所有参数：
+
+```python
+SimpleAgent.run(input_text, **kwargs)
+ReActAgent.run(input_text, max_iterations=3, **kwargs)
+PlanAgent.run(input_text, max_steps=5, **kwargs)
+```
+
+---
+
+## 十五、LLM 消息四种角色
+
+### 15.1 角色定义
+
+| 角色 | 谁发的 | 作用 |
+|------|--------|------|
+| `system` | 开发者 | 设定 AI 行为规则 |
+| `user` | 用户 | 用户输入 |
+| `assistant` | AI | AI 回复 |
+| `tool` | 工具 | 工具执行结果 |
+
+### 15.2 消息流程
+
+```
+1. system: "你是一个助手"
+2. user: "北京天气"
+3. assistant: [决定调用工具] + tool_calls
+4. tool: "北京 25°C，晴"
+5. assistant: "北京今天天气晴朗"
+```
+
+### 15.3 tool 角色的意义
+
+**为什么需要 tool 角色？**
+
+AI 需要区分"我说的"和"工具返回的数据"：
+
+```
+assistant: "我需要查天气"    ← AI 思考
+tool: "北京 25°C"           ← 工具数据（可信）
+assistant: "北京今天 25°C"  ← AI 基于数据回答
+```
+
+**ReAct Agent 的核心**：
+
+```
+思考 → 行动(tool_calls) → 观察(tool角色返回) → 继续思考
+```
+
+---
+
+## 十六、今日学习总结
+
+### 16.1 Python 语法
+
+| 主题 | 核心理解 |
+|------|---------|
+| `**kwargs` | 字典打包，`.get()` 取值，透传用 `**kwargs` |
+| `@classmethod` | 工厂方法，`cls` 指向类 |
+| `ABC` | 抽象基类，强制子类实现方法 |
+| `yield` | 生成器，暂停执行，逐个返回 |
+| 参数提升 | 子类可以把 kwargs 参数提升为显式参数 |
+
+### 16.2 Pydantic BaseModel
+
+| 主题 | 核心理解 |
+|------|---------|
+| `BaseModel` | 数据验证 + 序列化 |
+| `@field_validator` | 单字段验证，用 `cls` |
+| `@model_validator` | 多字段联合验证 |
+| 工厂方法 | `@classmethod` 定义 `from_env()` 等 |
+
+### 16.3 项目设计
+
+| 主题 | 核心理解 |
+|------|---------|
+| 模块划分 | 单一职责、分层架构、依赖倒置 |
+| invoke/stream_invoke | 非流式/流式两种调用方式 |
+| LLM 消息角色 | system/user/assistant/tool 四种角色 |
