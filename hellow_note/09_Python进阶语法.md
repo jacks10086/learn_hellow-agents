@@ -268,7 +268,184 @@ MyLLM（自定义层）         →  可进一步扩展
 
 ---
 
-## 八、C++/Qt 对比速查
+## 八、ABC 模块（抽象基类）
+
+### 8.1 核心概念
+
+`ABC` = Abstract Base Class（抽象基类），用于定义**不能直接实例化的类**，强制子类实现特定方法。
+
+**类比 C++ 纯虚函数**：
+
+```cpp
+// C++
+class Animal {
+public:
+    virtual void speak() = 0;  // 纯虚函数
+};
+
+Animal a;  // ❌ 编译错误！
+```
+
+```python
+# Python
+from abc import ABC, abstractmethod
+
+class Animal(ABC):
+    @abstractmethod
+    def speak(self):
+        pass
+
+a = Animal()  # ❌ TypeError!
+```
+
+### 8.2 实际应用（hello_agents）
+
+```python
+# core/agent.py
+class Agent(ABC):
+    """Agent基类，所有 Agent 必须实现 run 方法"""
+
+    @abstractmethod
+    def run(self, input_text: str, **kwargs) -> str:
+        """运行Agent"""
+        pass
+
+# 子类必须实现 run()
+class SimpleAgent(Agent):
+    def run(self, input_text: str, **kwargs) -> str:
+        return self.llm.invoke(input_text)
+
+# 不实现会报错
+class BadAgent(Agent):
+    pass
+
+BadAgent()  # ❌ TypeError: 必须实现 run()
+```
+
+### 8.3 ABC 的价值
+
+| 价值 | 说明 |
+|------|------|
+| 强制规范 | 子类必须实现特定方法 |
+| 接口定义 | 定义"有什么方法"，不关心"怎么实现" |
+| 提前发现错误 | 实例化时检查，而非运行时 |
+
+**对比**：
+
+```
+不用 ABC：运行时才发现缺少方法
+用 ABC：创建实例时就报错
+```
+
+---
+
+## 九、项目模块划分设计
+
+### 9.1 hello_agents 项目架构
+
+```
+hello_agents/
+│
+├─ core/                   # 核心层（底层能力）
+│   ├─ llm.py             # LLM 客户端
+│   ├─ agent.py           # Agent 基类
+│   ├─ message.py         # 消息类
+│   └─ config.py          # 配置类
+│
+├─ agents/                 # 智能体层（业务逻辑）
+│   ├─ simple_agent.py
+│   ├─ react_agent.py
+│   └─ reflection_agent.py
+│
+├─ tools/                  # 工具层（基础设施）
+│   ├─ base.py            # 工具基类
+│   ├─ registry.py        # 工具注册表
+│   └─ builtin/           # 内置工具
+│
+└─ utils/                  # 工具函数层
+    ├─ logging.py
+    └─ helpers.py
+```
+
+### 9.2 模块划分原则
+
+| 原则 | 说明 | 实践 |
+|------|------|------|
+| 单一职责 | 每个模块只做一件事 | `llm.py` 只管 LLM 调用 |
+| 分层架构 | 上层依赖下层 | `agents` → `core` → `utils` |
+| 开闭原则 | 扩展开放，修改关闭 | 继承基类添加新 Agent |
+| 依赖倒置 | 依赖抽象而非具体 | Agent 依赖 LLM 接口 |
+
+### 9.3 分层依赖关系
+
+```
+agents/     ← 上层：业务逻辑
+    ↓ 依赖
+core/       ← 中层：核心能力
+    ↓ 依赖
+tools/      ← 下层：基础设施
+utils/      ← 底层：通用工具
+```
+
+**原则**：上层依赖下层，下层不知道上层存在。
+
+### 9.4 设计示例：智能客服系统
+
+```
+smart_customer_service/
+│
+├─ core/                   # 核心层
+│   ├─ llm.py             # LLM 客户端
+│   └─ config.py          # 配置
+│
+├─ agents/                 # 智能体层
+│   ├─ chat_agent.py      # 对话 Agent
+│   └─ router_agent.py    # 路由 Agent
+│
+├─ knowledge/              # 知识库模块
+│   ├─ retriever.py       # 检索器
+│   └─ vector_store.py    # 向量存储
+│
+├─ tools/                  # 工具层
+│   ├─ order_query.py     # 查订单
+│   └─ logistics.py       # 查物流
+│
+└─ api/                    # API 层
+    └─ routes.py          # FastAPI 路由
+```
+
+### 9.5 常见模块划分模式
+
+**模式一：按技术分层**
+```
+project/
+├─ api/          # 接口层
+├─ service/      # 业务逻辑层
+├─ repository/   # 数据访问层
+└─ model/        # 数据模型
+```
+
+**模式二：按业务领域**
+```
+project/
+├─ user/         # 用户模块
+├─ order/        # 订单模块
+├─ product/      # 商品模块
+└─ payment/      # 支付模块
+```
+
+**模式三：按功能职责（hello_agents 采用）**
+```
+project/
+├─ core/         # 核心能力
+├─ agents/       # 业务实体
+├─ tools/        # 工具组件
+└─ utils/        # 辅助功能
+```
+
+---
+
+## 十、C++/Qt 对比速查
 
 | Python | C++ | Qt |
 |--------|-----|-----|
@@ -279,4 +456,18 @@ MyLLM（自定义层）         →  可进一步扩展
 | `set` | `std::set` | `QSet` |
 | `Literal` | `enum` | - |
 | `TypedDict` | `struct` | - |
+| `ABC` + `@abstractmethod` | 纯虚函数 `= 0` | `QAbstractXxx` |
 | `async/await` | `QFuture` | `QEventLoop` |
+
+---
+
+## 十一、VSCode 常用快捷键
+
+| 功能 | 快捷键 | 说明 |
+|------|--------|------|
+| 快速打开文件 | `Ctrl + P` | 输入文件名搜索 |
+| 全局搜索 | `Ctrl + Shift + F` | 在所有文件中搜索 |
+| 转到定义 | `F12` | 跳转到定义处 |
+| 命令面板 | `Ctrl + Shift + P` | 执行各种命令 |
+| 打开文件夹 | `Ctrl + K, Ctrl + O` | 打开新目录 |
+| 切换侧边栏 | `Ctrl + B` | 显示/隐藏资源管理器 |
