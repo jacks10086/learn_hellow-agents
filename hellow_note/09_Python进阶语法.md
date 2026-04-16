@@ -937,3 +937,292 @@ assistant: "北京今天 25°C"  ← AI 基于数据回答
 | 模块划分 | 单一职责、分层架构、依赖倒置 |
 | invoke/stream_invoke | 非流式/流式两种调用方式 |
 | LLM 消息角色 | system/user/assistant/tool 四种角色 |
+
+---
+
+## 十七、ABC vs BaseModel 使用场景对比
+
+### 17.1 核心区别
+
+| 工具 | 关注点 | 核心能力 |
+|------|--------|---------|
+| `ABC` | **行为**（方法） | 强制子类实现方法 |
+| `BaseModel` | **数据**（字段） | 验证、序列化 |
+
+### 17.2 使用场景选择
+
+**只用 ABC**：
+```python
+# 关注"能做什么"（行为）
+class Tool(ABC):
+    @abstractmethod
+    def run(self, *args, **kwargs) -> str:
+        pass
+
+class Calculator(Tool):
+    def run(self, expression: str) -> str:
+        return str(eval(expression))
+```
+
+**只用 BaseModel**：
+```python
+# 关注"数据是什么"（字段）
+class Message(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+
+msg = Message(role="user", content="你好")  # 验证通过
+```
+
+**ABC + BaseModel 组合**：
+```python
+# 既要数据验证，又要强制行为
+class MessageBase(BaseModel, ABC):
+    role: Literal["user", "assistant"]
+    content: str
+
+    @abstractmethod
+    def format(self) -> str:
+        pass
+
+class UserMessage(MessageBase):
+    def format(self) -> str:
+        return f"[用户] {self.content}"
+```
+
+### 17.3 选择指南
+
+| 需求 | 选择 |
+|------|------|
+| 只关心"能做什么" | ABC |
+| 只关心"数据是什么" | BaseModel |
+| 两者都要 | BaseModel + ABC 多继承 |
+
+### 17.4 hello_agents 项目的设计选择
+
+```python
+# ✅ 工具基类：只用 ABC（关注行为）
+class Tool(ABC):
+    @abstractmethod
+    def run(self, *args, **kwargs) -> str:
+        pass
+
+# ✅ 消息类：只用 BaseModel（关注数据）
+class Message(BaseModel):
+    role: str
+    content: str
+
+# ✅ Agent 基类：只用 ABC（关注行为）
+class Agent(ABC):
+    @abstractmethod
+    def run(self, input_text: str) -> str:
+        pass
+
+# ✅ 配置类：只用 BaseModel（关注数据验证）
+class Config(BaseModel):
+    debug: bool = False
+    temperature: float = Field(ge=0, le=2)
+```
+
+**设计原则**：不强制统一，根据职责选择合适的工具。
+
+### 17.5 速查表
+
+```
+┌───────────────────────────────────────────────────────────────────────┐
+│                    ABC vs BaseModel 选择速查                           │
+├───────────────────────────────────────────────────────────────────────┤
+│                                                                       │
+│  【只用 ABC】                                                          │
+│  ├─ 纯行为接口（不需要数据验证）                                        │
+│  ├─ 工具基类、插件系统、Agent 基类                                      │
+│  └─ 例：Tool、Agent、Plugin                                           │
+│                                                                       │
+│  【只用 BaseModel】                                                    │
+│  ├─ 纯数据模型（不需要强制方法）                                        │
+│  ├─ API 请求/响应、配置类、消息类                                       │
+│  └─ 例：Message、Config、User                                         │
+│                                                                       │
+│  【ABC + BaseModel 组合】                                              │
+│  ├─ 既要数据验证，又要强制行为                                          │
+│  ├─ 领域模型、复杂业务对象                                              │
+│  └─ 例：Document（需要验证字段 + 必须实现 render 方法）                  │
+│                                                                       │
+└───────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 十八、生成器表达式 + all() 函数
+
+### 18.1 语法解析
+
+```python
+all(param in parameters for param in required_params)
+```
+
+**分步理解**：
+
+1. `for param in required_params` → 遍历每个参数名
+2. `param in parameters` → 检查是否在参数字典中，返回 True/False
+3. `all(...)` → 所有结果都为 True 才返回 True
+
+### 18.2 等价写法
+
+```python
+# 生成器表达式（推荐，省内存）
+all(param in parameters for param in required_params)
+
+# 列表推导式（创建中间列表）
+all([param in parameters for param in required_params])
+
+# 传统写法
+def check_all():
+    for param in required_params:
+        if param not in parameters:
+            return False
+    return True
+```
+
+### 18.3 `in` 的两种含义
+
+```python
+all(param in parameters for param in required_params)
+#        ↑ 第一个 in：成员检查（返回 True/False）
+#                              ↑ 第二个 in：循环遍历
+```
+
+---
+
+## 十九、类属性 vs 实例属性
+
+### 19.1 核心区别
+
+| | 类属性 | 实例属性 |
+|--|--------|---------|
+| 定义位置 | 类名下 | `__init__` 里用 `self.xxx` |
+| 访问方式 | `Class.attr` 或 `self.attr` | `self.attr` |
+| 内存 | 所有实例**共享**一份 | 每个实例**各自**一份 |
+| C++ 类比 | `static` 静态成员 | 普通成员变量 |
+
+### 19.2 代码对比
+
+```python
+class Dog:
+    species = "犬科"  # 类属性（共享）
+
+    def __init__(self, name):
+        self.name = name  # 实例属性（独立）
+
+dog1 = Dog("旺财")
+dog2 = Dog("大黄")
+
+Dog.species = "哺乳动物"  # 修改类属性，所有实例都变
+print(dog1.species)  # 哺乳动物
+print(dog2.species)  # 哺乳动物
+
+dog1.name = "小黑"  # 修改实例属性，只影响自己
+print(dog1.name)    # 小黑
+print(dog2.name)    # 大黄（不变）
+```
+
+### 19.3 Pydantic 特例
+
+Pydantic 用类属性语法定义字段，但自动转换为实例属性：
+
+```python
+class User(BaseModel):
+    name: str  # 看起来是类属性，实际变成实例属性
+
+u1 = User(name="张三")
+u2 = User(name="李四")
+# u1.name 和 u2.name 互不影响
+```
+
+### 19.4 选择指南
+
+| 场景 | 用类属性 | 用实例属性 |
+|------|---------|-----------|
+| 常量/配置 | ✅ `PI = 3.14` | ❌ |
+| 计数器 | ✅ `count = 0` | ❌ |
+| Pydantic 模型 | ✅ 特殊处理 | ❌ |
+| 每个实例独立的值 | ❌ | ✅ `self.name` |
+| 运行时创建的数据 | ❌ | ✅ `self._tools = {}` |
+
+---
+
+## 二十、tools 模块设计
+
+### 20.1 模块职责
+
+| 文件 | 职责 | 类比 |
+|------|------|------|
+| `base.py` | 定义"工具是什么" | 接口定义 |
+| `registry.py` | 管理"有哪些工具" | 容器/管理器 |
+
+### 20.2 架构图
+
+```
+base.py                          registry.py
+┌─────────────────────┐          ┌─────────────────────┐
+│ ToolParameter       │          │ ToolRegistry        │
+│ (BaseModel)         │          │                     │
+│ - name, type, desc  │          │ - _tools: dict      │
+│                     │          │ - _functions: dict  │
+│ Tool (ABC)          │          │                     │
+│ - name, description │◄─────────│ register_tool()     │
+│ - run() [抽象]      │   注册   │ execute_tool()      │
+│ - get_parameters()  │          │ get_tools_desc()    │
+│ - validate_params() │          └─────────────────────┘
+│ - to_dict()         │
+└─────────────────────┘
+```
+
+### 20.3 两种注册方式
+
+| 方式 | 方法 | 适用场景 |
+|------|------|---------|
+| Tool 对象 | `register_tool(Tool实例)` | 复杂工具、参数验证、多参数 |
+| 函数直接 | `register_function(name, desc, func)` | 简单工具、快速原型 |
+
+### 20.4 全局注册表
+
+```python
+# registry.py 末尾
+global_registry = ToolRegistry()
+```
+
+**作用**：模块级单例，整个项目共享同一个注册表。
+
+```python
+# 文件 A
+from hello_agents.tools import global_registry
+global_registry.register_tool(tool)
+
+# 文件 B（同一个注册表）
+from hello_agents.tools import global_registry
+global_registry.execute_tool('tool_name')  # ✅ 能找到
+```
+
+**原理**：Python 模块只加载一次，模块级变量天然是单例。
+
+---
+
+## 二十一、今日学习总结
+
+### 21.1 Python 语法进阶
+
+| 主题 | 核心理解 |
+|------|---------|
+| 生成器表达式 | `(x for x in iter)` 省内存，配合 `all()`/`any()` |
+| 类属性 vs 实例属性 | 类名下 vs `self.xxx`；共享 vs 独立 |
+| `in` 两种用法 | 成员检查 vs 循环遍历 |
+
+### 21.2 项目设计
+
+| 主题 | 核心理解 |
+|------|---------|
+| ABC vs BaseModel | 行为接口 vs 数据验证，按需选择 |
+| tools 模块 | base.py 定义接口，registry.py 管理实例 |
+| 注册表模式 | 统一管理工具，动态注册/执行 |
+| 全局注册表 | 模块级单例，跨文件共享 |
