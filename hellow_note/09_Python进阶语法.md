@@ -1226,3 +1226,245 @@ global_registry.execute_tool('tool_name')  # ✅ 能找到
 | tools 模块 | base.py 定义接口，registry.py 管理实例 |
 | 注册表模式 | 统一管理工具，动态注册/执行 |
 | 全局注册表 | 模块级单例，跨文件共享 |
+
+---
+
+## 二十二、Callable 类型注解
+
+### 22.1 基本语法
+
+```python
+from typing import Callable
+
+Callable[[参数类型...], 返回类型]
+```
+
+**含义**：描述一个**可调用对象**（函数、lambda、带 `__call__` 的类）的类型。
+
+### 22.2 常见形式
+
+| 类型 | 含义 | 示例 |
+|------|------|------|
+| `Callable[[str], str]` | 接收 str，返回 str | `lambda s: s.upper()` |
+| `Callable[[int, int], int]` | 接收两个 int，返回 int | `lambda a, b: a + b` |
+| `Callable[[], str]` | 无参数，返回 str | `lambda: "hello"` |
+| `Callable[..., Any]` | 任意参数，任意返回 | 通用函数 |
+| `Callable` | 任意可调用对象 | 不限定签名 |
+
+### 22.3 实际应用
+
+**作为参数类型**：
+
+```python
+from typing import Callable
+
+def apply_func(func: Callable[[str], str], value: str) -> str:
+    '''func 必须是：接收 str，返回 str'''
+    return func(value)
+
+# 使用
+result = apply_func(lambda s: s.upper(), "hello")
+print(result)  # HELLO
+```
+
+**在注册表中**：
+
+```python
+class ToolRegistry:
+    def __init__(self):
+        self._tools: dict[str, Callable[[str], str]] = {}
+
+    def register(self, name: str, func: Callable[[str], str]):
+        self._tools[name] = func
+
+    def execute(self, name: str, arg: str) -> str:
+        return self._tools[name](arg)
+```
+
+### 22.4 C++ 类比
+
+```cpp
+// C++ std::function
+std::function<std::string(std::string)> func;
+
+// Python Callable
+Callable[[str], str]
+```
+
+### 22.5 核心价值
+
+| 价值 | 说明 |
+|------|------|
+| 类型安全 | IDE 检查传入的函数是否符合预期 |
+| 代码提示 | IDE 知道这个参数是一个函数 |
+| 文档化 | 一眼看出函数接收什么、返回什么 |
+
+---
+
+## 二十三、enumerate 内置函数
+
+### 23.1 核心作用
+
+在遍历时**同时获取索引和值**。
+
+```python
+# 基本用法
+fruits = ['apple', 'banana', 'cherry']
+for i, fruit in enumerate(fruits):
+    print(i, fruit)
+# 0 apple
+# 1 banana
+# 2 cherry
+
+# 指定起始索引
+for i, fruit in enumerate(fruits, start=1):
+    print(i, fruit)
+# 1 apple
+# 2 banana
+# 3 cherry
+```
+
+### 23.2 C++ 对比
+
+```cpp
+// C++ 传统写法
+for (int i = 0; i < steps.size(); i++) {
+    auto& step = steps[i];
+    std::cout << i << ": " << step << std::endl;
+}
+
+# Python 写法（等价但更简洁）
+for i, step in enumerate(steps):
+    print(f"{i}: {step}")
+```
+
+### 23.3 返回值
+
+```python
+e = enumerate(['a', 'b', 'c'])
+print(list(e))
+# [(0, 'a'), (1, 'b'), (2, 'c')]  # 返回 (索引, 值) 元组
+```
+
+### 23.4 常用场景
+
+| 场景 | 写法 |
+|------|------|
+| 遍历列表带索引 | `for i, item in enumerate(lst)` |
+| 显示步骤进度 | `f"步骤 {i+1}/{len(lst)}"` |
+| 修改列表元素 | `for i, val in enumerate(lst): lst[i] = val * 2` |
+
+---
+
+## 二十四、字符串 format 方法
+
+### 24.1 基本语法
+
+```python
+# 位置占位符
+template = "你好，{}，欢迎来到{}"
+result = template.format("张三", "北京")
+# "你好，张三，欢迎来到北京"
+
+# 命名占位符（项目中使用）
+template = "搜索关键词：{keyword}，数量：{count}"
+result = template.format(keyword="天气", count=5)
+# "搜索关键词：天气，数量：5"
+```
+
+### 24.2 **kwargs 解包
+
+```python
+context = {"keyword": "天气", "count": 5}
+
+# 不用解包（繁琐）
+"{keyword} - {count}".format(keyword=context["keyword"], count=context["count"])
+
+# 用 ** 解包（简洁）
+"{keyword} - {count}".format(**context)
+# 自动把字典键值展开成关键字参数
+```
+
+### 24.3 三种格式化方式对比
+
+```python
+name, age = "张三", 25
+
+# 1. % 格式化（老式）
+"姓名：%s，年龄：%d" % (name, age)
+
+# 2. format 方法（Python 2.6+）
+"姓名：{}，年龄：{}".format(name, age)
+"姓名：{n}，年龄：{a}".format(n=name, a=age)
+
+# 3. f-string（Python 3.6+，最推荐）
+f"姓名：{name}，年龄：{age}"
+```
+
+**选择指南**：
+
+| 场景 | 推荐 |
+|------|------|
+| 模板内容硬编码 | f-string（最简洁） |
+| 模板来自配置/用户输入 | `format(**dict)` |
+| 兼容旧版本 | `%` 格式化 |
+
+---
+
+## 二十五、Optional 类型注解
+
+### 25.1 核心作用
+
+表示返回值**可能为 None**。
+
+```python
+from typing import Optional
+
+def get_chain_info(self, name: str) -> Optional[Dict[str, Any]]:
+    # 返回值可能是：Dict 或 None
+```
+
+### 25.2 为什么用 Optional？
+
+```python
+# 不用 Optional（返回 Dict）
+def get_chain_info(self, name: str) -> Dict[str, Any]:
+    # 如果链不存在，必须返回空字典 {} 或抛异常
+    # 无法区分"没找到"和"找到空结果"
+
+# 用 Optional
+def get_chain_info(self, name: str) -> Optional[Dict[str, Any]]:
+    if name not in self.chains:
+        return None  # 明确表达"没找到"
+    return {...}     # 找到了，返回字典
+```
+
+### 25.3 三种处理"没找到"的方式
+
+| 方式 | Python 示例 | 适用场景 |
+|------|-------------|----------|
+| 返回 `None` | `Optional[Dict]` | 需要区分"没找到"和"找到空结果" |
+| 返回空容器 | `return {}` | 调用者只需迭代，不关心是否有数据 |
+| 抛异常 | `raise KeyError()` | "没找到"是异常情况 |
+
+### 25.4 C++ 类比
+
+```cpp
+// C++17 std::optional
+std::optional<QVariantMap> getChainInfo(const QString& name) {
+    if (!chains.contains(name)) {
+        return std::nullopt;  // 对应 Python 的 None
+    }
+    return chainToMap(chains[name]);  // 对应 Python 的 Dict
+}
+```
+
+### 25.5 Python 3.10+ 新写法
+
+```python
+# 旧写法
+from typing import Optional
+def func() -> Optional[Dict[str, Any]]: ...
+
+# 新写法（Python 3.10+）
+def func() -> Dict[str, Any] | None: ...
