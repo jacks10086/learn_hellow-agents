@@ -573,4 +573,230 @@ async def test():
 
 ---
 
+## 十二、实战案例：async_executor.py
+
+### 12.1 模块核心价值
+
+```
+┌─────────────────────────────────────────────────────┐
+│           async_executor.py 解决的问题               │
+├─────────────────────────────────────────────────────┤
+│  工具是同步的（阻塞），但我们需要并行执行多个工具      │
+│  → 用线程池包装同步代码，让异步事件循环不被阻塞       │
+└─────────────────────────────────────────────────────┘
+```
+
+### 12.2 关键设计：同步转异步
+
+**问题**：`registry.execute_tool()` 是同步函数，会阻塞事件循环。
+
+```python
+# 同步函数，调用时会卡住
+def execute_tool(self, name: str, input_text: str) -> str:
+    return tool.run(...)  # 可能耗时几秒
+```
+
+**解决方案**：`run_in_executor()` 把同步函数丢到线程池执行。
+
+```python
+async def execute_tool_async(self, tool_name: str, input_data: str) -> str:
+    loop = asyncio.get_event_loop()  # 获取当前事件循环
+
+    def _execute():  # 包装同步调用
+        return self.registry.execute_tool(tool_name, input_data)
+
+    # 在线程池中执行，不阻塞事件循环
+    result = await loop.run_in_executor(self.executor, _execute)
+    return result
+```
+
+**执行流程**：
+
+```
+主线程（事件循环）              工作线程
+      │                           │
+      │  run_in_executor()        │
+      │ ────────────────────────► │ 执行 _execute()
+      │                           │ 调用 registry.execute_tool()
+      │  可以处理其他协程          │ 等待结果...
+      │                           │
+      │  ◄──────────────────────── │ 返回结果
+      │  await 拿到结果            │
+```
+
+**C++ 类比**：
+
+```cpp
+// Qt 类似做法
+QThreadPool::globalInstance()->start([this]() {
+    QString result = registry->executeTool(name, input);
+    emit finished(result);
+});
+```
+
+### 12.3 ThreadPoolExecutor
+
+```python
+import concurrent.futures
+
+def __init__(self, registry: ToolRegistry, max_workers: int = 4):
+    self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+```
+
+**线程池的作用**：
+
+| 不用线程池 | 用线程池 |
+|-----------|---------|
+| 每次创建新线程 | 复用固定数量的线程 |
+| 创建销毁开销大 | 线程常驻，效率高 |
+| 无限制可能爆内存 | `max_workers` 限制并发数 |
+
+### 12.4 并行执行多个工具
+
+```python
+async def execute_tools_parallel(self, tasks: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+    # 创建异步任务
+    async_tasks = []
+    for i, task in enumerate(tasks):
+        async_task = self.execute_tool_async(tool_name, input_data)
+        async_tasks.append((i, task, async_task))
+
+    # 等待所有任务完成
+    results = []
+    for i, task, async_task in async_tasks:
+        result = await async_task  # 逐个等待结果
+        results.append({...})
+
+    return results
+```
+
+**执行效果**：
+
+```python
+# 4 个工具任务，每个耗时 2 秒
+tasks = [
+    {"tool_name": "search", "input_data": "天气"},
+    {"tool_name": "search", "input_data": "新闻"},
+    {"tool_name": "calc", "input_data": "1+1"},
+    {"tool_name": "calc", "input_data": "2*3"},
+]
+
+# 同步执行：2 + 2 + 2 + 2 = 8 秒
+# 并行执行：max(2, 2, 2, 2) = 2 秒（4 个线程同时跑）
+```
+
+### 12.5 异步上下文管理器
+
+```python
+class AsyncToolExecutor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def close(self):
+        self.executor.shutdown(wait=True)  # 等待所有任务完成
+```
+
+**用法**：
+
+```python
+# 同步 with
+with AsyncToolExecutor(registry) as executor:
+    results = await executor.execute_tools_parallel(tasks)
+# 退出时自动调用 close()
+
+# 异步 async with
+async with AsyncToolExecutor(registry) as executor:
+    results = await executor.execute_tools_parallel(tasks)
+```
+
+**`__enter__` / `__exit__` vs `__aenter__` / `__aexit__`**：
+
+| 协议 | 方法 | 用法 |
+|------|------|------|
+| 同步上下文管理器 | `__enter__` / `__exit__` | `with obj:` |
+| 异步上下文管理器 | `__aenter__` / `__aexit__` | `async with obj:` |
+
+### 12.6 同步包装函数
+
+```python
+def run_parallel_tools_sync(registry: ToolRegistry, tasks: List[Dict[str, str]], ...) -> List[Dict[str, Any]]:
+    """同步版本的并行工具执行"""
+    return asyncio.run(run_parallel_tools(registry, tasks, max_workers))
+```
+
+**设计意图**：让不懂异步的调用者也能用。
+
+```python
+# 不用关心异步细节
+results = run_parallel_tools_sync(registry, tasks)
+
+# 等价于
+results = asyncio.run(run_parallel_tools(registry, tasks))
+```
+
+### 12.7 完整调用链
+
+```
+用户代码
+    │
+    ▼
+run_parallel_tools_sync()         # 同步入口
+    │
+    │ asyncio.run()
+    ▼
+run_parallel_tools()              # 异步便捷函数
+    │
+    │ async with
+    ▼
+AsyncToolExecutor
+    │
+    │ execute_tools_parallel()
+    ▼
+execute_tool_async() × N          # 并发执行 N 个
+    │
+    │ run_in_executor()
+    ▼
+ThreadPoolExecutor                # 线程池执行
+    │
+    │ 在工作线程中
+    ▼
+registry.execute_tool()           # 同步工具调用
+```
+
+### 12.8 企业级设计要点
+
+| 设计点 | 体现 | 好处 |
+|--------|------|------|
+| 线程池复用 | `ThreadPoolExecutor` | 避免频繁创建销毁线程 |
+| 并发限制 | `max_workers=4` | 防止资源耗尽 |
+| 异常隔离 | 每个任务 try-catch | 一个失败不影响其他 |
+| 同步/异步双接口 | `run_parallel_tools` + `run_parallel_tools_sync` | 兼容不同调用者 |
+| 资源清理 | `close()` + `__exit__` | 确保线程池关闭 |
+
+### 12.9 核心模式总结
+
+```python
+# 模式：同步函数转异步
+async def wrap_sync_to_async(sync_func, *args):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, sync_func, *args)
+
+# 模式：批量并行执行
+async def parallel_execute(tasks):
+    coroutines = [execute_one(task) for task in tasks]
+    return await asyncio.gather(*coroutines)
+
+# 模式：同步/异步双接口
+def sync_entry():
+    return asyncio.run(async_impl())
+
+async def async_entry():
+    return await async_impl()
+```
+
+---
+
 *整理自 LangGraph 学习过程中的异步编程讨论*
